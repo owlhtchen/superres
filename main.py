@@ -1,5 +1,3 @@
-from audioop import bias
-from cgi import test
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,19 +31,19 @@ class CustomImageDataset(Dataset):
         input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2YCR_CB)
         gt_image = cv2.imread(os.path.join(self.gt_dir, image_name)).astype('float32') / 255.0
         gt_image = cv2.cvtColor(gt_image, cv2.COLOR_BGR2YCR_CB)
-        input_image = torch.tensor(input_image, device=device).permute(2, 0, 1).float()
-        bicubic_input = torch.tensor(bicubic_input, device=device).permute(2, 0, 1).float()
-        gt_image = torch.tensor(gt_image, device=device).permute(2, 0, 1).float()
+        input_image = torch.tensor(input_image, device=device).permute(2, 0, 1).float().contiguous()
+        bicubic_input = torch.tensor(bicubic_input, device=device).permute(2, 0, 1).float().contiguous()
+        gt_image = torch.tensor(gt_image, device=device).permute(2, 0, 1).float().contiguous()
         return input_image, bicubic_input, gt_image, image_name
 
 class SuperRes(nn.Module):
     def __init__(self):
         super().__init__()
-        # self.feature_ch = [96, 76, 65, 55, 47, 39, 32]
-        # self.reconstruct_ch = {"A1": 64, "B1": 32, "B2": 32, "L": 4}
+        self.feature_ch = [96, 76, 65, 55, 47, 39, 32]
+        self.reconstruct_ch = {"A1": 64, "B1": 32, "B2": 32, "L": 4}
         self.scale_factor = 2
-        self.feature_ch = [32, 26, 22, 18, 14, 11, 8]
-        self.reconstruct_ch = {"A1": 24, "B1": 8, "B2": 8, "L": 4}
+        # self.feature_ch = [32, 26, 22, 18, 14, 11, 8]
+        # self.reconstruct_ch = {"A1": 24, "B1": 8, "B2": 8, "L": 4}
         self.conv_cnn0 = nn.Conv2d(1, self.feature_ch[0], kernel_size=3, padding=1, bias=True)
         self.conv_cnn1 = nn.Conv2d(self.feature_ch[0], self.feature_ch[1], kernel_size=3, padding=1, bias=True)
         self.conv_cnn2 = nn.Conv2d(self.feature_ch[1], self.feature_ch[2], kernel_size=3, padding=1, bias=True)
@@ -91,15 +89,11 @@ class SuperRes(nn.Module):
         b_out = self.B(feature_concat)
         reconstruct_concat = torch.cat([a_out, b_out], dim=1)
         output = self.L(reconstruct_concat)
-        # out_r1 = torch.concat((output[:, 0:1, :, :], output[:, 1:2, :, :]), dim=2)
-        # out_r2 = torch.concat((output[:, 2:3, :, :], output[:, 3:4, :, :]), dim=2)
-        # return torch.concat((out_r1, out_r2), dim=3)
-        out_tensor = torch.zeros((n, c, h * self.scale_factor, w * self.scale_factor), device=device)
-        # out_tensor[:, :, torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor)] = output[:, 0:1, :, :]
-        # out_tensor[:, :, torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor)] = output[:, 1:2, :, :]
-        # out_tensor[:, :, torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor)] = output[:, 2:3, :, :]
-        # out_tensor[:, :, torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor)] = output[:, 3:4, :, :]
+        # print("c={}".format(c))
+        out_tensor = torch.zeros((n, 1, h * self.scale_factor, w * self.scale_factor), device=device)
         grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
+        # print("grid_x={}".format(grid_x))
+        # print("grid_y={}".format(grid_y))
         out_tensor[:, :, grid_x, grid_y] = output[:, 0:1, :, :].contiguous()
         # grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
         out_tensor[:, :, grid_x + 1, grid_y] = output[:, 1:2, :, :].contiguous()
@@ -117,7 +111,7 @@ if __name__ == "__main__":
     model = SuperRes()
     if torch.cuda.is_available():
         model.cuda()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     epochs = 50
     loss_fn = nn.MSELoss()
     for epoch in range(epochs):
