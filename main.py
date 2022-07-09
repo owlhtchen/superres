@@ -78,7 +78,7 @@ class SuperRes(nn.Module):
         self.L = nn.Conv2d(self.reconstruct_ch['A1'] + self.reconstruct_ch['B2'], self.scale_factor * self.scale_factor, kernel_size=1, padding=0, bias=True)
     
     def forward(self, x):
-        n, _, h, w = x.shape
+        n, c, h, w = x.shape
         x0 = self.cnn0(x)
         x1 = self.cnn1(x0)
         x2 = self.cnn2(x1)
@@ -91,9 +91,23 @@ class SuperRes(nn.Module):
         b_out = self.B(feature_concat)
         reconstruct_concat = torch.cat([a_out, b_out], dim=1)
         output = self.L(reconstruct_concat)
-        out_r1 = torch.concat((output[:, 0:1, :, :], output[:, 1:2, :, :]), dim=2)
-        out_r2 = torch.concat((output[:, 2:3, :, :], output[:, 3:4, :, :]), dim=2)
-        return torch.concat((out_r1, out_r2), dim=3)
+        # out_r1 = torch.concat((output[:, 0:1, :, :], output[:, 1:2, :, :]), dim=2)
+        # out_r2 = torch.concat((output[:, 2:3, :, :], output[:, 3:4, :, :]), dim=2)
+        # return torch.concat((out_r1, out_r2), dim=3)
+        out_tensor = torch.zeros((n, c, h * self.scale_factor, w * self.scale_factor), device=device)
+        # out_tensor[:, :, torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor)] = output[:, 0:1, :, :]
+        # out_tensor[:, :, torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor)] = output[:, 1:2, :, :]
+        # out_tensor[:, :, torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor)] = output[:, 2:3, :, :]
+        # out_tensor[:, :, torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor)] = output[:, 3:4, :, :]
+        grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
+        out_tensor[:, :, grid_x, grid_y] = output[:, 0:1, :, :]
+        grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
+        out_tensor[:, :, grid_x, grid_y] = output[:, 1:2, :, :]
+        grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
+        out_tensor[:, :, grid_x, grid_y] = output[:, 2:3, :, :]
+        grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
+        out_tensor[:, :, grid_x, grid_y] = output[:, 3:4, :, :]
+        return out_tensor
 
 if __name__ == "__main__":
     train_dataset = CustomImageDataset()
