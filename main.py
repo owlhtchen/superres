@@ -100,14 +100,14 @@ class SuperRes(nn.Module):
         # out_tensor[:, :, torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor)] = output[:, 2:3, :, :]
         # out_tensor[:, :, torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor)] = output[:, 3:4, :, :]
         grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
-        out_tensor[:, :, grid_x, grid_y] = output[:, 0:1, :, :]
-        grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
-        out_tensor[:, :, grid_x, grid_y] = output[:, 1:2, :, :]
-        grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
-        out_tensor[:, :, grid_x, grid_y] = output[:, 2:3, :, :]
-        grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
-        out_tensor[:, :, grid_x, grid_y] = output[:, 3:4, :, :]
-        return out_tensor
+        out_tensor[:, :, grid_x, grid_y] = output[:, 0:1, :, :].contiguous()
+        # grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
+        out_tensor[:, :, grid_x + 1, grid_y] = output[:, 1:2, :, :].contiguous()
+        # grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
+        out_tensor[:, :, grid_x, grid_y + 1] = output[:, 2:3, :, :].contiguous()
+        # grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
+        out_tensor[:, :, grid_x + 1, grid_y + 1] = output[:, 3:4, :, :].contiguous()
+        return out_tensor.contiguous()
 
 if __name__ == "__main__":
     train_dataset = CustomImageDataset()
@@ -127,7 +127,7 @@ if __name__ == "__main__":
             input_image, bicubic_input, gt_image, image_name = data
             # print("bicubic_input.shape={}".format(bicubic_input.shape))
             output_y = model(input_image[:, 0:1, :, :]) # only Y-channel
-            print("output_y.shape={}".format(output_y.shape))
+            # print("output_y.shape={}".format(output_y.shape))
             # print("input_image[:, 1:, :, :].shape={}".format(bicubic_input[:, 1:, :, :].shape))
             new_images = torch.concat([output_y, bicubic_input[:, 1:, :, :]], dim=1)
             # new_images = torch.concat([bicubic_input[:, :1, :, :], bicubic_input[:, 1:, :, :]], dim=1) # ok
