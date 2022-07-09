@@ -24,11 +24,19 @@ class CustomImageDataset(Dataset):
         return len(self.image_names)
 
     def __getitem__(self, idx):
-        input_image = cv2.imread(os.path.join(self.input_dir, self.image_names[idx])) / 255.0
+        image_name = self.image_names[idx]
+        image_path = os.path.join(self.input_dir, image_name)
+        input_image = cv2.imread(image_path)
+        bicubic_input = cv2.resize(input_image, dsize=None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC).astype('float32') / 255.0
+        bicubic_input = cv2.cvtColor(bicubic_input, cv2.COLOR_BGR2YCR_CB)
+        input_image = input_image.astype('float32') / 255.0
+        input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2YCR_CB)
+        gt_image = cv2.imread(os.path.join(self.gt_dir, image_name)).astype('float32') / 255.0
+        gt_image = cv2.cvtColor(gt_image, cv2.COLOR_BGR2YCR_CB)
         input_image = torch.tensor(input_image, device=device).permute(2, 0, 1).float()
-        gt_image = cv2.imread(os.path.join(self.gt_dir, self.image_names[idx])) / 255.0
+        bicubic_input = torch.tensor(bicubic_input, device=device).permute(2, 0, 1).float()
         gt_image = torch.tensor(gt_image, device=device).permute(2, 0, 1).float()
-        return input_image, gt_image
+        return input_image, bicubic_input, gt_image, image_name
 
 class SuperRes(nn.Module):
     def __init__(self):
@@ -38,7 +46,7 @@ class SuperRes(nn.Module):
         self.scale_factor = 2
         self.feature_ch = [32, 26, 22, 18, 14, 11, 8]
         self.reconstruct_ch = {"A1": 24, "B1": 8, "B2": 8, "L": 4}
-        self.conv_cnn0 = nn.Conv2d(3, self.feature_ch[0], kernel_size=3, padding=1, bias=True)
+        self.conv_cnn0 = nn.Conv2d(1, self.feature_ch[0], kernel_size=3, padding=1, bias=True)
         self.conv_cnn1 = nn.Conv2d(self.feature_ch[0], self.feature_ch[1], kernel_size=3, padding=1, bias=True)
         self.conv_cnn2 = nn.Conv2d(self.feature_ch[1], self.feature_ch[2], kernel_size=3, padding=1, bias=True)
         self.conv_cnn3 = nn.Conv2d(self.feature_ch[2], self.feature_ch[3], kernel_size=3, padding=1, bias=True)
@@ -70,7 +78,7 @@ class SuperRes(nn.Module):
         self.L = nn.Conv2d(self.reconstruct_ch['A1'] + self.reconstruct_ch['B2'], self.scale_factor * self.scale_factor, kernel_size=1, padding=0, bias=True)
     
     def forward(self, x):
-        n, c, h, w = x.shape
+        n, _, h, w = x.shape
         x0 = self.cnn0(x)
         x1 = self.cnn1(x0)
         x2 = self.cnn2(x1)
@@ -83,14 +91,15 @@ class SuperRes(nn.Module):
         b_out = self.B(feature_concat)
         reconstruct_concat = torch.cat([a_out, b_out], dim=1)
         output = self.L(reconstruct_concat)
-        # TODO: c = 1 here vs c = 3 in rgb images
-        return torch.reshape(output, (n, 1, self.scale_factor * h, self.scale_factor * w))
+        out_r1 = torch.concat((output[:, 0:1, :, :], output[:, 1:2, :, :]), dim=2)
+        out_r2 = torch.concat((output[:, 2:3, :, :], output[:, 3:4, :, :]), dim=2)
+        return torch.concat((out_r1, out_r2), dim=3)
 
 if __name__ == "__main__":
     train_dataset = CustomImageDataset()
     train_dataloader = DataLoader(train_dataset, batch_size=30, shuffle=False)
-    # test_input, test_gt = next(iter(train_dataset))
-    # print(test_input.shape)
+    # test_input, test_bicubic_input, test_gt = next(iter(train_dataset))
+    # print(test_bicubic_input.shape)
     model = SuperRes()
     if torch.cuda.is_available():
         model.cuda()
@@ -101,13 +110,24 @@ if __name__ == "__main__":
         epoch_loss = 0
         for i, data in enumerate(train_dataloader):
             optimizer.zero_grad()
-            input_image, gt_image = data
-            output_image = model(input_image)
-            # print("output_image.shape={}".format(output_image.shape))
-            # print("gt_image.shape={}".format(gt_image.shape))
-            loss = loss_fn(output_image, gt_image)
+            input_image, bicubic_input, gt_image, image_name = data
+            # print("bicubic_input.shape={}".format(bicubic_input.shape))
+            output_y = model(input_image[:, 0:1, :, :]) # only Y-channel
+            print("output_y.shape={}".format(output_y.shape))
+            # print("input_image[:, 1:, :, :].shape={}".format(bicubic_input[:, 1:, :, :].shape))
+            new_images = torch.concat([output_y, bicubic_input[:, 1:, :, :]], dim=1)
+            # new_images = torch.concat([bicubic_input[:, :1, :, :], bicubic_input[:, 1:, :, :]], dim=1) # ok
+            # print("new_images.shape={}".format(new_images.shape))
+            loss = loss_fn(output_y, gt_image[:, 0:1, :, :])
             epoch_loss += loss
             loss.backward()
             optimizer.step()
             print("batch={}".format(i))
+        one_image = new_images[0, :, :, :].cpu().permute(1, 2, 0).detach().numpy()
+        # one_image = bicubic_input[0, :, :, :].cpu().permute(1, 2, 0).detach().numpy() # ok
+        one_image = (cv2.cvtColor(one_image, cv2.COLOR_YCrCb2BGR) * 255.0).astype('uint8')
+        print("one_image.shape={}".format(one_image.shape))
+        print("image_path={}".format(image_name[0]))
+        debug_out_path = os.path.join("debug", image_name[0])
+        cv2.imwrite(debug_out_path, one_image)        
         print("epoch={}, loss={}".format(epoch, epoch_loss))
