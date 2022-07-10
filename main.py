@@ -12,12 +12,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 class CustomImageDataset(Dataset):
     def __init__(self):
-        self.input_dir = "resized"
-        self.gt_dir = "original"
+        self.input_dir = "resized_40"
+        self.gt_dir = "original_80"
         input_names = set(os.listdir(self.input_dir))
         gt_names = set(os.listdir(self.gt_dir))
         assert(input_names == gt_names)
-        self.image_names = list(input_names)[:900]
+        self.image_names = list(input_names)#[:900]
         self.images = [self.get(i) for i in tqdm(range(len(self)))]
 
     def __len__(self):
@@ -78,10 +78,13 @@ class SuperRes(nn.Module):
             cnn_B2,
             nn.PReLU()
         )
-        self.L = nn.Conv2d(self.reconstruct_ch['A1'] + self.reconstruct_ch['B2'], self.scale_factor * self.scale_factor, kernel_size=1, padding=0, bias=True)
+        self.L = nn.Conv2d(self.reconstruct_ch['A1'] + self.reconstruct_ch['B2'], self.scale_factor * self.scale_factor, kernel_size=1, padding=0, bias=False)
     
     def forward(self, x):
         n, c, h, w = x.shape
+        assert(1 == c)
+        scale_factor = (self.scale_factor, self.scale_factor)
+        bicubic_x = F.interpolate(x, scale_factor=scale_factor, mode='bicubic')
         x0 = self.cnn0(x)
         x1 = self.cnn1(x0)
         x2 = self.cnn2(x1)
@@ -95,28 +98,29 @@ class SuperRes(nn.Module):
         reconstruct_concat = torch.cat([a_out, b_out], dim=1)
         output = self.L(reconstruct_concat)
         # print("c={}".format(c))
-        out_tensor = torch.zeros((n, 1, h * self.scale_factor, w * self.scale_factor), device=device)
+        reshape_out = torch.zeros((n, 1, h * self.scale_factor, w * self.scale_factor), device=device)
         grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
         # print("grid_x={}".format(grid_x))
         # print("grid_y={}".format(grid_y))
-        out_tensor[:, :, grid_x, grid_y] = output[:, 0:1, :, :].contiguous()
+        reshape_out[:, :, grid_x, grid_y] = output[:, 0:1, :, :].contiguous()
         # grid_x, grid_y = torch.meshgrid(torch.arange(0, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
-        out_tensor[:, :, grid_x + 1, grid_y] = output[:, 1:2, :, :].contiguous()
+        reshape_out[:, :, grid_x + 1, grid_y] = output[:, 1:2, :, :].contiguous()
         # grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(0, w * self.scale_factor, self.scale_factor), indexing='ij')
-        out_tensor[:, :, grid_x, grid_y + 1] = output[:, 2:3, :, :].contiguous()
+        reshape_out[:, :, grid_x, grid_y + 1] = output[:, 2:3, :, :].contiguous()
         # grid_x, grid_y = torch.meshgrid(torch.arange(1, h * self.scale_factor, self.scale_factor), torch.arange(1, w * self.scale_factor, self.scale_factor), indexing='ij')
-        out_tensor[:, :, grid_x + 1, grid_y + 1] = output[:, 3:4, :, :].contiguous()
-        return out_tensor.contiguous()
+        reshape_out[:, :, grid_x + 1, grid_y + 1] = output[:, 3:4, :, :].contiguous()
+        return bicubic_x + reshape_out.contiguous()
 
 if __name__ == "__main__":
+    PT_PATH = "saved.pt"
     train_dataset = CustomImageDataset()
-    train_dataloader = DataLoader(train_dataset, batch_size=30, shuffle=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=False)
     # test_input, test_bicubic_input, test_gt = next(iter(train_dataset))
     # print(test_bicubic_input.shape)
     model = SuperRes()
     if torch.cuda.is_available():
         model.cuda()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.002)
     epochs = 50
     loss_fn = nn.MSELoss()
     for epoch in range(epochs):
@@ -138,7 +142,7 @@ if __name__ == "__main__":
             epoch_loss += float(loss.item())
             loss.backward()
             optimizer.step()
-            print("batch={}, loss={}".format(i, loss.item()))
+            # print("batch={}".format(i))
         one_image = np.clip(new_images[0, :, :, :].cpu().permute(1, 2, 0).detach().numpy(), 0.0, 1.0)
         assert not np.any(np.isnan(one_image))
         # one_image = bicubic_input[0, :, :, :].cpu().permute(1, 2, 0).detach().numpy() # ok
@@ -150,3 +154,5 @@ if __name__ == "__main__":
         debug_out_path = os.path.join("debug", image_name[0])
         cv2.imwrite(debug_out_path, one_image)        
         print("epoch={}, loss={}".format(epoch, epoch_loss))
+
+    torch.save(model, PT_PATH)
